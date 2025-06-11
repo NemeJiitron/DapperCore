@@ -2,6 +2,7 @@
 using Microsoft.Data.Sqlite;
 using DapperCore.Entities;
 using System.Reflection;
+using DapperCore.HomeWork;
 
 namespace DapperCore
 {
@@ -10,23 +11,178 @@ namespace DapperCore
         static void Main(string[] args)
         {
             // connect to db
-            string connectionString = "Data Source=library.db";
+            string connectionString = "Data Source=shelter.db";
 
             using SqliteConnection connection = new SqliteConnection(connectionString);
             connection.Open();
-            //AgregationFuncs
-            //int bookCount = connection.ExecuteScalar<int>("select count(*) from Books;");
+            AppDbContext db = new AppDbContext();
+            db.initDb(connection);
 
-            //multiquery
-            //var multiquery = connection.QueryMultiple(@"
-            //            select * from Books;
-            //            select count(*) from Books;");
+            db.Menu(connection);
+            
 
-            //var allbooks = multiquery.Read<Book>().ToList();
-            //var count = multiquery.ReadSingle<int>();
-            //Console.WriteLine(allbooks[0]);
-            //Console.WriteLine(count);
+            
+        }
 
+        private static void ReadVisitorWithLoans(SqliteConnection connection)
+        {
+            string visitorsWithLoans = @"
+                    select v.Id, v.Name, v.PhoneNumber, v.DateOfBirth,
+                        b.Id, b.Title, b.AuthorId,
+                        l.LoanDate, l.ReturnDate
+                        from Books b
+                        join Loans l on l.BookId = b.Id
+                        join Visitors v on l.VisitorId = v.Id";
+
+            var visitorMap = new Dictionary<int, Visitor>();
+
+            var visitors = connection.Query<Visitor, Book, string, string, Visitor>(
+                    visitorsWithLoans,
+                    (visitor, book, loanDate, returnDate) =>
+                    {
+                        if (!visitorMap.TryGetValue(visitor.Id, out var v))
+                        {
+                            v = visitor;
+                            v.Loans = new List<LoanInfo>();
+                            visitorMap.Add(visitor.Id, v);
+                        }
+                        v.Loans.Add
+                        (
+                            new LoanInfo
+                            {
+                                Book = book,
+                                LoanDate = DateTime.Parse(loanDate),
+                                ReturnDate = string.IsNullOrEmpty(returnDate) ? null : DateTime.Parse(returnDate)
+                            }
+                        );
+                        return v;
+                    },
+                    splitOn: "Id,LoanDate,ReturnDate"
+                    ).Distinct().ToList();
+
+            foreach (Visitor v in visitors)
+            {
+                Console.WriteLine($"{v.Id}. {v.Name} - {v.Phonenumber}");
+                foreach (var l in v.Loans)
+                {
+                    Console.WriteLine($"{l.Book.ToString()}, LoanDate: {l.LoanDate}, ReturnDate: {(string.IsNullOrEmpty(l.ReturnDate.ToString()) ? "Not returned" : l.ReturnDate.ToString())}");
+                }
+            }
+        }
+
+        private static void AddLoan(SqliteConnection connection)
+        {
+            string loanBook = @"insert into Loans (VisitorId, BookId, LoanDate, ReturnDate)
+                                values (@VisitorId, @BookId, @LoanDate, @ReturnDate)";
+            connection.Execute(loanBook,
+                new
+                {
+                    VisitorId = 1,
+                    BookId = 1,
+                    LoanDate = DateTime.Now.ToString("yyyy-MM-dd"),
+                    ReturnDate = (DateTime?)null
+                });
+        }
+
+        private static void ReadAuthorsAndBooks(SqliteConnection connection)
+        {
+            string authorsQuery = @"
+                    select a.Id, a.Name, a.DateOfBirth, b.Id, b.Title, b.AuthorId from Authors a
+                    left join Books b on b.AuthorId = a.Id;";
+
+            var authorMap = new Dictionary<int, Author>();
+
+            var authors = connection.Query<Author, Book, Author>(
+                authorsQuery,
+                (a, b) =>
+                {
+                    if (!authorMap.TryGetValue(a.Id, out Author author))
+                    {
+                        author = a;
+                        author.Books = new List<Book>();
+                        authorMap.Add(author.Id, author);
+                    }
+                    if(b != null)
+                        author.Books.Add(b);
+
+                    return author;
+                },
+                splitOn: "Id"
+                ).Distinct().ToList();
+            foreach (var author in authors)
+            {
+                Console.WriteLine(author.Id.ToString() + ". " + author.Name + ": ");
+                foreach (var book in author.Books)
+                {
+                    Console.WriteLine(book.ToString());
+                }
+            }
+        }
+
+        private static void AddAuthorAndBooks(SqliteConnection connection, out int authorId, out string bookInsert)
+        {
+            string authorInsert = @"
+                insert into Authors (Name, DateOfBirth)
+                values (@Name, @DateOfBirth);
+                select last_insert_rowid();";
+
+            authorId = connection.ExecuteScalar<int>(authorInsert, new { Name = "Taras Shevchenko", DateOfBirth = new DateTime(1813, 3, 9) });
+            bookInsert = @"
+                insert into Books (Title, AuthorId)
+                values (@Title, @AuthorId);";
+            connection.Execute(bookInsert,
+                new[]
+                {
+                    new { Title = "Kobzar", AuthorId = authorId},
+                    new { Title = "Son", AuthorId = authorId}
+                }
+                );
+        }
+
+        private static void ReadVisitors(SqliteConnection connection)
+        {
+            string visitorsQuery = @"
+                    select v.Id, v.Name, v.Phonenumber, v.DateOfBirth, p.PassportNumber, p.VisitorId from Visitors v
+                    join Passports p on p.VisitorId = v.Id;";
+            var visitors = connection.Query<Visitor, Passport, Visitor>(
+                visitorsQuery,
+                (v, p) =>
+                {
+                    v.Passport = p;
+                    p.Visitor = v;
+                    return v;
+                },
+                splitOn: "PassportNumber"
+                ).ToList();
+
+            foreach (var visitor in visitors)
+            {
+                Console.WriteLine($"{visitor.Id}. {visitor.Name} --- {visitor.Passport.PassportNumber}");
+            }
+        }
+
+        private static void AddVisitor(SqliteConnection connection)
+        {
+            using SqliteTransaction transaction = connection.BeginTransaction();
+
+            string insertVisitor = @"insert into Visitors ([Name], [Phonenumber], [DateOfBirth])
+                 values (@Name, @PhoneNumber, @DateOfBirth);
+                select last_insert_rowid();";
+            string insertPassport = "insert into Passports ([PassportNumber], [VisitorId]) values (@PassportNumber, @VisitorId);";
+
+            int visitorId = connection.ExecuteScalar<int>(insertVisitor, new
+            {
+                Name = "Nick",
+                PhoneNumber = "131123421",
+                DateOfBirth = DateTime.Now
+            }, transaction);
+
+            connection.Execute(insertPassport, new { PassportNumber = "131312", VisitorId = visitorId }, transaction);
+            transaction.Commit();
+        }
+
+        private static void Menu(SqliteConnection connection)
+        {
             int choice1 = 1;
             while (choice1 != 0)
             {
@@ -35,7 +191,7 @@ namespace DapperCore
                 switch (choice1)
                 {
                     case 1:
-                        AddBook(connection, new Book { Author = Console.ReadLine(), Title = Console.ReadLine() });
+                        AddBook(connection, new Book { AuthorId = int.Parse(Console.ReadLine()), Title = Console.ReadLine() });
                         break;
                     case 2:
                         ReadBooks(connection);
@@ -82,11 +238,11 @@ namespace DapperCore
                         break;
                     case 5:
                         int bookId = int.Parse(Console.ReadLine());
-                        if(connection.Query<Book>("select * from Books where Id = @Id", new { Id = bookId}).Count() != 0)
+                        if (connection.Query<Book>("select * from Books where Id = @Id", new { Id = bookId }).Count() != 0)
                         {
                             Console.WriteLine("Update\n1 - Author\n2 - Title");
                             int choice4 = int.Parse(Console.ReadLine());
-                            switch(choice4)
+                            switch (choice4)
                             {
                                 case 1:
                                     UpdateBookAuthor(connection, bookId);
@@ -160,12 +316,46 @@ namespace DapperCore
         static void initDB(SqliteConnection connection)
         {
             connection.Execute(@"
-            Create table if not exists Books
+
+            create table if not exists Authors
+            (
+                Id integer primary key autoincrement,
+                Name text not null,
+                DateOfBirth text not null
+            );
+            create table if not exists Books
             (
                 Id integer primary key autoincrement,
                 Title text not null,
-                Author text not null
-            );");
+                AuthorId integer not null,
+                foreign key (AuthorId) references Authors(Id)
+            );
+            create table if not exists Visitors
+            (
+                Id integer primary key autoincrement,
+                Name text not null,
+                Phonenumber text not null,
+                DateOfBirth text not null
+            );
+            create table if not exists Passports
+            (
+                Id integer primary key autoincrement,
+                PassportNumber text not null,
+                VisitorId integer not null unique,
+                foreign key (VisitorId) references Visitors(Id)
+            );
+            create table if not exists Loans
+            (
+                VisitorId integer not null,
+                BookId integer not null,
+                LoanDate text not null,
+                ReturnDate text,
+                primary key (VisitorId, BookId, LoanDate),
+                foreign key (VisitorId) references Visitors(Id),
+                foreign key (BookId) references Books(Id)
+            );
+            ");
+
         }
     }
 }
