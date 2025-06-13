@@ -3,6 +3,7 @@ using Microsoft.Data.Sqlite;
 using DapperCore.Entities;
 using System.Reflection;
 using DapperCore.HomeWork;
+using DapperCore.HomeWork.Entities;
 
 namespace DapperCore
 {
@@ -17,11 +18,15 @@ namespace DapperCore
             connection.Open();
             AppDbContext db = new AppDbContext();
             db.initDb(connection);
-
+            connection.Execute("delete from Dogs where Dogs.Id in (2, 3);");
+            var dogs = connection.Query<Dog>("select * from Dogs;");
+            foreach (Dog dog in dogs)
+            {
+                Console.WriteLine(dog.ToString());
+            }
             db.Menu(connection);
-            
 
-            
+
         }
 
         private static void ReadVisitorWithLoans(SqliteConnection connection)

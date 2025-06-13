@@ -13,10 +13,12 @@ namespace DapperCore.HomeWork.Entities
         public int Age { get; set; }
         public string Breed { get; set; }
         public int IsAdopted{ get; set; }
+        public int? AdopterId { get; set; }
+        public Adopter? Adopter { get; set; }
 
         public override string ToString()
         {
-            return $"{Id}. Name: {Name}, Age: {Age}, Breed: {Breed}, Adopted: {(IsAdopted == 1 ? "Yes" : "No")}";
+            return $"{Id}. Name: {Name}, Age: {Age}, Breed: {Breed}, Adopted: {(IsAdopted == 1 ? $"Yes, AdopterId: {AdopterId}" : "No")}";
         }
 
     }

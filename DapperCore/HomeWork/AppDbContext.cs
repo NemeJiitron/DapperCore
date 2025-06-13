@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using System.Xml.Linq;
 using Dapper;
 using DapperCore.Entities;
 using DapperCore.HomeWork.Entities;
@@ -16,12 +17,12 @@ namespace DapperCore.HomeWork
         {
             while(true)
             {
-                Console.WriteLine("1 - insert dog\n2 - read dogs\n3 - search by\n4 - update dog\n0 - quit");
+                Console.WriteLine("1 - insert dog\n2 - read dogs\n3 - search dog by\n4 - update dog\n5 - insert adopter\n6 - sheltering\n0 - quit");
                 int choice = int.Parse(Console.ReadLine());
                 switch(choice)
                 {
                     case 1:
-                        Insert(connection);
+                        InsertDog(connection);
                         break;
                     case 2:
                         Console.WriteLine("1 - read not adopted\n2 - read adopted");
@@ -43,6 +44,14 @@ namespace DapperCore.HomeWork
                         int id = int.Parse(Console.ReadLine());
                         UpdateDogBy(connection, id);
                         break;
+                    case 5:
+                        InsertAdopter(connection);
+                        break;
+                    case 6:
+                        Console.WriteLine("Enter adopter Id:");
+                        int adopterid = int.Parse(Console.ReadLine());
+                        AdoptADog(connection, adopterid);
+                        break;
                 }
 
                 if(choice == 0)
@@ -61,11 +70,19 @@ namespace DapperCore.HomeWork
                 Name text not null,
                 Age integer not null,
                 Breed text not null,
-                IsAdopted integer default 0 not null check(IsAdopted in (0, 1))
+                IsAdopted integer default 0 not null check(IsAdopted in (0, 1)),
+                AdopterId int null,
+                foreign key (AdopterId) references Adopters(Id)
+            );
+            create table if not exists Adopters
+            (
+                Id integer primary key autoincrement,
+                Name text not null,
+                PhoneNumber text not null
             );");
         }
 
-        public void Insert(SqliteConnection connection)
+        public void InsertDog(SqliteConnection connection)
         {
             string insertDog = @"
                     insert into Dogs(Name, Age, Breed, IsAdopted)
@@ -78,16 +95,90 @@ namespace DapperCore.HomeWork
             string breed = Console.ReadLine();
             Console.WriteLine("Is dog adopted (0 or 1):");
             int adopted = int.Parse(Console.ReadLine());
-            connection.Execute(insertDog, new { Name = name, Age = age, Breed = breed, IsAdopted = adopted });
+            if(adopted == 1)
+            {
+                Console.WriteLine("Id of dog adopter:");
+                int adopter = int.Parse(Console.ReadLine());
+                if(connection.Query<Adopter>($"select * from Adopters a where a.Id = {adopter};").ToList().Any())
+                {
+                    string insertAdoptedDog = @"
+                    insert into Dogs(Name, Age, Breed, IsAdopted, AdopterId)
+                    values (@Name, @Age, @Breed, @IsAdopted, @AdopterId);";
+                    connection.Execute(insertAdoptedDog, new { Name = name, Age = age, Breed = breed, IsAdopted = adopted, AdopterId = adopter });
+                } else { Console.WriteLine("Adopter is non-existant. Try again"); }
+            }
+            else 
+            {
+                connection.Execute(insertDog, new { Name = name, Age = age, Breed = breed, IsAdopted = adopted });
+            }
         }
-        public void ReadAdopted(SqliteConnection connection)
+
+        public void InsertAdopter(SqliteConnection connection)
+        {
+            string insertAdopter = @"
+                    insert into Adopters(Name, PhoneNumber)
+                    values (@Name, @PhoneNumber);";
+            Console.WriteLine("Adopter name:");
+            string name = Console.ReadLine();
+            Console.WriteLine("Adopter phonenumber:");
+            string phone = Console.ReadLine();
+            connection.Execute(insertAdopter, new { Name = name, PhoneNumber = phone });
+        }
+
+        public void AdoptADog(SqliteConnection connection, int adopterId)
+        {
+            string adoptersQuery = @$"
+                        select * from Adopters a where a.Id = {adopterId};";
+            var adopters = connection.Query<Adopter>(adoptersQuery).ToList();
+            if (adopters.Any())
+            {
+                Console.WriteLine("Dog id: ");
+                int dogId = int.Parse(Console.ReadLine());
+                if (connection.Query<Dog>($"select * from Dogs d where d.Id = {dogId} and d.IsAdopted = 0;").ToList().Any())
+                {
+                    string updateDog = @$"
+                    update Dogs
+                    set AdopterId = @AdopterId, IsAdopted = 1
+                    where Id = {dogId};";
+                    connection.Execute(updateDog, new { AdopterId = adopterId });
+                }
+                else { Console.WriteLine("Dog is adopted or non-existant"); }
+            }
+            else { Console.WriteLine("Adopter is non-existant"); }
+        }
+
+        private static void ReadAdopted(SqliteConnection connection)
         {
             string dogsQuery = @"
-                        select * from Dogs d where d.IsAdopted = 1;";
-            var dogs = connection.Query<Dog>(dogsQuery).ToList();
-            foreach (var d in dogs)
+                    select a.Id, a.Name, a.PhoneNumber, d.Id, d.Name, d.Age, d.Breed, d.IsAdopted, d.AdopterId from Adopters a
+                    join Dogs d on d.AdopterId = a.Id;";
+
+            var dogsMap = new Dictionary<int, Adopter>();
+
+            var adopters = connection.Query<Adopter, Dog, Adopter>(
+                dogsQuery,
+                (a, d) =>
+                {
+                    if (!dogsMap.TryGetValue(a.Id, out Adopter adopter))
+                    {
+                        adopter = a;
+                        adopter.Dogs = new List<Dog>();
+                        dogsMap.Add(adopter.Id, adopter);
+                    }
+                    if (d != null)
+                        adopter.Dogs.Add(d);
+
+                    return adopter;
+                },
+                splitOn: "Id"
+                ).Distinct().ToList();
+            foreach (var adopter in adopters)
             {
-                Console.WriteLine(d.ToString());
+                Console.WriteLine(adopter.Id.ToString() + ". " + adopter.Name + ": ");
+                foreach (var dog in adopter.Dogs)
+                {
+                    Console.WriteLine(dog.ToString());
+                }
             }
         }
 
